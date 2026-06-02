@@ -8,7 +8,7 @@ use dugong::graphlib::{Graph, GraphOptions};
 use dugong::{EdgeLabel, GraphLabel, LabelPos, NodeLabel, RankDir};
 use merman_core::MermaidConfig;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::label::compute_bounds;
 use super::node::node_layout_dimensions;
@@ -198,10 +198,17 @@ fn lowest_common_parent(
 }
 
 fn extract_descendants(id: &str, g: &Graph<NodeLabel, EdgeLabel, GraphLabel>) -> Vec<String> {
-    let children = g.children(id);
-    let mut out: Vec<String> = children.iter().map(|s| s.to_string()).collect();
-    for child in children {
-        out.extend(extract_descendants(child, g));
+    let mut out: Vec<String> = Vec::new();
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut stack: Vec<String> = g.children(id).iter().map(|s| s.to_string()).collect();
+    while let Some(node) = stack.pop() {
+        if !visited.insert(node.clone()) {
+            continue;
+        }
+        for child in g.children(&node) {
+            stack.push(child.to_string());
+        }
+        out.push(node);
     }
     out
 }
@@ -2950,4 +2957,34 @@ fn layout_flowchart_v2_with_model(
         bounds,
         dom_node_order_by_root,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn extract_descendants_handles_deeply_nested_subgraphs() {
+        const DEPTH: usize = 100_000;
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(move || {
+                let mut g = Graph::new(GraphOptions {
+                    compound: true,
+                    ..Default::default()
+                });
+                for i in (0..DEPTH).rev() {
+                    g.set_parent(format!("n{}", i + 1), format!("n{i}"));
+                }
+                let _ = tx.send(extract_descendants("n0", &g));
+            })
+            .unwrap();
+        let descendants = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("extract_descendants overflowed the stack on deep nesting (ZED-8QJ)");
+        assert_eq!(descendants.len(), DEPTH);
+    }
 }
