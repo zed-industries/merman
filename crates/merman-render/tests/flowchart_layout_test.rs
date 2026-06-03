@@ -1334,3 +1334,22 @@ fn flowchart_subgraph_title_wraps_long_word_in_svglike_mode() {
     );
     assert!((cluster.title_label.height - wrapped.height).abs() < 1e-6);
 }
+
+#[test]
+fn mutually_nested_subgraphs_report_recoverable_error() {
+    // `A` contains `B` and `B` contains `A`, which makes the subgraph parent map cyclic.
+    // Layout must report this as a recoverable model error rather than panicking in
+    // `Graph::set_parent` (or recursing into a stack overflow).
+    let text = "flowchart TD\n  subgraph A\n    B\n  end\n  subgraph B\n    A\n  end";
+    let engine = Engine::new();
+    let parsed = futures::executor::block_on(engine.parse_diagram(text, ParseOptions::default()))
+        .expect("parse ok")
+        .expect("diagram detected");
+    let err = layout_parsed(&parsed, &LayoutOptions::default())
+        .expect_err("mutually nested subgraphs should be a recoverable error");
+    let message = err.to_string();
+    assert!(
+        message.contains("cycle in subgraph membership"),
+        "expected a subgraph-cycle error, got: {message}"
+    );
+}

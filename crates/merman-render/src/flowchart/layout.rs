@@ -1133,6 +1133,23 @@ fn layout_flowchart_v2_with_model(
             }
         }
 
+        // Mutually nested subgraphs (e.g. `A` contains `B` while `B` contains `A`) make the parent
+        // map cyclic. Feeding such a relationship to `Graph::set_parent` panics (it forbids cycles,
+        // matching upstream graphlib), so detect it here and surface it as a recoverable model
+        // error. Only subgraphs can be parents, so walking from each subgraph id finds any cycle.
+        for sg in &model.subgraphs {
+            let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            let mut current: Option<&str> = Some(sg.id.as_str());
+            while let Some(id) = current {
+                if !seen.insert(id) {
+                    return Err(Error::InvalidModel {
+                        message: format!("cycle in subgraph membership involving {id}"),
+                    });
+                }
+                current = parent_by_id.get(id).map(String::as_str);
+            }
+        }
+
         let insert_with_parent =
             |id: &str,
              g: &mut Graph<NodeLabel, EdgeLabel, GraphLabel>,
